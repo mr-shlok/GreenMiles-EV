@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from app.models.schema import BatteryInput, RouteRequest
 from app.models.profile_schema import EVProfileCreate, EVProfileUpdate
 from app.core.database import get_ev_profile, save_ev_profile
@@ -8,6 +8,8 @@ import os
 import requests
 from dotenv import load_dotenv
 import numpy as np
+import zipfile
+import io
 
 load_dotenv()
 
@@ -406,3 +408,135 @@ def data_to_dataframe(data: BatteryInput):
     return df
 
 
+# ─────────────────────────────────────────────────────────────
+# Charging Stations helpers
+# ─────────────────────────────────────────────────────────────
+
+STATIONS_ZIP_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "ML_Models", "EV-charging-station.zip")
+
+def _load_stations_df() -> pd.DataFrame:
+    """Load the EV charging station CSV from the zip file."""
+    zip_path = os.path.abspath(STATIONS_ZIP_PATH)
+    if not os.path.exists(zip_path):
+        raise FileNotFoundError(f"Stations zip not found at: {zip_path}")
+    with zipfile.ZipFile(zip_path, "r") as z:
+        csv_names = [n for n in z.namelist() if n.endswith(".csv")]
+        if not csv_names:
+            raise ValueError("No CSV file found inside the zip archive")
+        with z.open(csv_names[0]) as f:
+            df = pd.read_csv(f)
+    return df
+
+
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return distance in km between two lat/lon points."""
+    R = 6371.0
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return R * 2 * np.arcsin(np.sqrt(a))
+
+
+# ─────────────────────────────────────────────────────────────
+# GET /api/v1/charging-stations
+# ─────────────────────────────────────────────────────────────
+
+@router.get("/charging-stations")
+def get_charging_stations():
+    """Return all EV charging stations as a GeoJSON FeatureCollection."""
+    try:
+        df = _load_stations_df()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not load station data: {e}")
+
+    # Normalise column names (strip whitespace)
+    df.columns = [c.strip() for c in df.columns]
+
+    features = []
+    for _, row in df.iterrows():
+        try:
+            lat = float(row.get("Latitude", row.get("latitude", 0)))
+            lon = float(row.get("Longitude", row.get("longitude", 0)))
+        except (ValueError, TypeError):
+            continue  # skip rows with bad coordinates
+
+        if lat == 0 and lon == 0:
+            continue
+
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "station_id": str(row.get("Station ID", row.get("station_id", ""))),
+                "rating": float(row.get("Reviews (Rating)", row.get("rating", 0)) or 0),
+                "cost": float(row.get("Cost (USD/kWh)", row.get("cost", 0)) or 0),
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [lon, lat],   # GeoJSON: [lng, lat]
+            },
+        })
+
+    return {"type": "FeatureCollection", "features": features}
+
+
+# ─────────────────────────────────────────────────────────────
+# GET /api/v1/best-station
+# ─────────────────────────────────────────────────────────────
+
+@router.get("/best-station")
+def get_best_station(
+    vehicle_lat: float = Query(..., description="Vehicle latitude"),
+    vehicle_lon: float = Query(..., description="Vehicle longitude"),
+    battery_percent: float = Query(..., description="Current battery level (0-100)"),
+    battery_capacity_kwh: float = Query(60.0, description="Battery capacity in kWh"),
+    efficiency_km_per_kwh: float = Query(6.0, description="Vehicle efficiency in km/kWh"),
+):
+    """
+    Find the nearest EV charging station reachable with the current battery.
+    Returns the closest station within remaining range.
+    """
+    # Calculate remaining range
+    remaining_range_km = (battery_percent / 100.0) * battery_capacity_kwh * efficiency_km_per_kwh
+
+    try:
+        df = _load_stations_df()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not load station data: {e}")
+
+    df.columns = [c.strip() for c in df.columns]
+
+    best = None
+    best_dist = float("inf")
+
+    for _, row in df.iterrows():
+        try:
+            lat = float(row.get("Latitude", row.get("latitude", 0)))
+            lon = float(row.get("Longitude", row.get("longitude", 0)))
+        except (ValueError, TypeError):
+            continue
+
+        if lat == 0 and lon == 0:
+            continue
+
+        dist = _haversine(vehicle_lat, vehicle_lon, lat, lon)
+
+        if dist <= remaining_range_km and dist < best_dist:
+            best_dist = dist
+            best = {
+                "station_id": str(row.get("Station ID", row.get("station_id", ""))),
+                "latitude": lat,
+                "longitude": lon,
+                "distance_km": round(dist, 2),
+                "rating": float(row.get("Reviews (Rating)", row.get("rating", 0)) or 0),
+                "cost": float(row.get("Cost (USD/kWh)", row.get("cost", 0)) or 0),
+                "remaining_range_km": round(remaining_range_km, 2),
+            }
+
+    if best is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No reachable charging station found within {round(remaining_range_km, 1)} km range.",
+        )
+
+    return best

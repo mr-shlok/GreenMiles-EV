@@ -4,363 +4,442 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { useGlobalState } from '../App';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
-// Set the access token globally
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
 const ChargingStations = ({ routeData }) => {
-  const { globalState, updateGlobalState } = useGlobalState();
-  const [chargingStations, setChargingStations] = useState([]);
-  const [selectedStation, setSelectedStation] = useState(null);
-  const [showModal, setShowModal] = useState(false);
-  
+  const { globalState } = useGlobalState();
+
+  // Form state for nearest-station lookup
+  const [vehicleLat, setVehicleLat] = useState('');
+  const [vehicleLon, setVehicleLon] = useState('');
+  const [batteryPercent, setBatteryPercent] = useState('');
+  const [batteryCapacity, setBatteryCapacity] = useState('60');
+  const [efficiency, setEfficiency] = useState('6');
+
+  // Results
+  const [bestStation, setBestStation] = useState(null);
+  const [stationError, setStationError] = useState('');
+  const [loadingBest, setLoadingBest] = useState(false);
+  const [loadingStations, setLoadingStations] = useState(true);
+  const [stationCount, setStationCount] = useState(0);
+
+  // Low-battery warning (auto-suggest)
+  const [lowBatteryWarning, setLowBatteryWarning] = useState(false);
+
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
-  const markersRef = useRef([]);
-  
-  // Mock charging stations data
-  const mockChargingStations = [
-    {
-      id: 1,
-      name: "ElectroCharge Hub",
-      type: "Fast Charging",
-      distance: 2.5,
-      waitingTime: 15,
-      detourImpact: 3.2,
-      coordinates: [77.22, 28.71],
-      chargingSpeed: "50kW DC",
-      fullChargeTime: "45 mins"
-    },
-    {
-      id: 2,
-      name: "PowerPoint Station",
-      type: "Fast Charging",
-      distance: 4.8,
-      waitingTime: 10,
-      detourImpact: 2.1,
-      coordinates: [77.25, 28.73],
-      chargingSpeed: "150kW DC",
-      fullChargeTime: "20 mins"
-    },
-    {
-      id: 3,
-      name: "City Charge Point",
-      type: "Normal Charging",
-      distance: 1.2,
-      waitingTime: 45,
-      detourImpact: 1.8,
-      coordinates: [77.20, 28.69],
-      chargingSpeed: "7kW AC",
-      fullChargeTime: "3 hours"
-    },
-    {
-      id: 4,
-      name: "QuickCharge Plaza",
-      type: "Fast Charging",
-      distance: 6.3,
-      waitingTime: 20,
-      detourImpact: 4.5,
-      coordinates: [77.28, 28.75],
-      chargingSpeed: "100kW DC",
-      fullChargeTime: "30 mins"
-    }
-  ];
-  
-  useEffect(() => {
-    // In a real app, this would fetch from the backend
-    setChargingStations(mockChargingStations);
-    
-    // Update global state with charging stations
-    updateGlobalState({ chargingStations: mockChargingStations });
-  }, [updateGlobalState]);
-  
-  // Initialize Map
-  useEffect(() => {
-    if (!mapContainerRef.current) return;
+  const bestMarkerRef = useRef(null);
 
-    // Prevent multiple maps
-    if (mapRef.current) return;
+  // ── Auto-populate form when routeData indicates low battery ──
+  useEffect(() => {
+    if (!routeData?.routes?.length) return;
+    const route = routeData.routes[0];
+    const endBattery = (route.start_battery || 85) - (route.battery_percentage_usage || 0);
+    if (endBattery < 20) {
+      setLowBatteryWarning(true);
+      setBatteryPercent(String(Math.max(0, Math.round(endBattery))));
+      // Try to pre-fill coords from route start
+      if (route.geometry?.coordinates?.length) {
+        const [lon, lat] = route.geometry.coordinates[0];
+        setVehicleLat(String(lat));
+        setVehicleLon(String(lon));
+      }
+    }
+  }, [routeData]);
+
+  // ── Initialise Mapbox map ──
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
 
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/navigation-day-v1',
-      center: [77.22, 28.71], // Delhi/NCR region
-      zoom: 11
+      style: 'mapbox://styles/mapbox/dark-v11',
+      center: [78.9629, 20.5937], // India centre
+      zoom: 4,
     });
 
-    // Add navigation controls
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-
     mapRef.current = map;
 
-    // Cleanup
+    // ── Load all stations as a GeoJSON layer once the style is ready ──
+    map.on('load', () => {
+      fetch(`${API_URL}/charging-stations`)
+        .then((res) => res.json())
+        .then((geojson) => {
+          setStationCount(geojson.features?.length || 0);
+          setLoadingStations(false);
+
+          map.addSource('stations', { type: 'geojson', data: geojson });
+
+          // Glow halo
+          map.addLayer({
+            id: 'stations-halo',
+            type: 'circle',
+            source: 'stations',
+            paint: {
+              'circle-radius': 10,
+              'circle-color': '#69E300',
+              'circle-opacity': 0.15,
+              'circle-blur': 1,
+            },
+          });
+
+          // Main dot
+          map.addLayer({
+            id: 'stations-layer',
+            type: 'circle',
+            source: 'stations',
+            paint: {
+              'circle-radius': 5,
+              'circle-color': '#69E300',
+              'circle-stroke-width': 1.5,
+              'circle-stroke-color': '#fff',
+            },
+          });
+
+          // Popup on click
+          map.on('click', 'stations-layer', (e) => {
+            const { station_id, rating, cost } = e.features[0].properties;
+            const [lng, lat] = e.features[0].geometry.coordinates;
+            new mapboxgl.Popup({ offset: 10 })
+              .setLngLat([lng, lat])
+              .setHTML(
+                `<div style="color:#0f172a;font-family:sans-serif;font-size:13px">
+                  <strong>Station ${station_id}</strong><br/>
+                  ⭐ Rating: ${rating.toFixed(1)}<br/>
+                  💲 Cost: $${cost.toFixed(2)}/kWh
+                </div>`
+              )
+              .addTo(map);
+          });
+
+          map.on('mouseenter', 'stations-layer', () => {
+            map.getCanvas().style.cursor = 'pointer';
+          });
+          map.on('mouseleave', 'stations-layer', () => {
+            map.getCanvas().style.cursor = '';
+          });
+        })
+        .catch(() => setLoadingStations(false));
+    });
+
     return () => {
-      // Remove all markers
-      markersRef.current.forEach(marker => marker.remove());
-      markersRef.current = [];
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
+      if (bestMarkerRef.current) bestMarkerRef.current.remove();
+      map.remove();
+      mapRef.current = null;
     };
   }, []);
-  
-  // Update charging station markers when stations change
-  useEffect(() => {
-    if (!mapRef.current || chargingStations.length === 0) return;
 
-    // Remove existing markers
-    markersRef.current.forEach(marker => marker.remove());
-    markersRef.current = [];
+  // ── Find nearest reachable station ──
+  const handleFindNearest = async (e) => {
+    e.preventDefault();
+    setStationError('');
+    setBestStation(null);
+    setLoadingBest(true);
 
-    // Add new markers for charging stations
-    chargingStations.forEach(station => {
-      const [lng, lat] = station.coordinates;
-      
-      // Create custom marker element based on charging type
-      const el = document.createElement('div');
-      el.className = 'marker';
-      el.style.backgroundColor = station.type === 'Fast Charging' ? '#3B82F6' : '#9CA3AF';
-      el.style.width = '32px';
-      el.style.height = '32px';
-      el.style.borderRadius = '50%';
-      el.style.border = '2px solid white';
-      el.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-      el.style.display = 'flex';
-      el.style.alignItems = 'center';
-      el.style.justifyContent = 'center';
-      el.style.cursor = 'pointer';
-      
-      // Add charging icon
-      const icon = document.createElement('div');
-      icon.innerHTML = station.type === 'Fast Charging' ? '⚡' : '🔌';
-      icon.style.color = 'white';
-      icon.style.fontSize = '14px';
-      icon.style.fontWeight = 'bold';
-      el.appendChild(icon);
-      
-      // Create marker and add to map
-      const marker = new mapboxgl.Marker({ element: el })
-        .setLngLat([lng, lat])
-        .setPopup(new mapboxgl.Popup().setHTML(`<strong>${station.name}</strong><br/>${station.type}<br/>${station.distance} km away`))
-        .addTo(mapRef.current);
-        
-      // Add click event to marker
-      el.addEventListener('click', () => {
-        setSelectedStation(station);
-        setShowModal(true);
-      });
-      
-      markersRef.current.push(marker);
+    const params = new URLSearchParams({
+      vehicle_lat: vehicleLat,
+      vehicle_lon: vehicleLon,
+      battery_percent: batteryPercent,
+      battery_capacity_kwh: batteryCapacity,
+      efficiency_km_per_kwh: efficiency,
     });
-    
-    // Fit bounds to show all charging stations
-    if (chargingStations.length > 0) {
-      const bounds = new mapboxgl.LngLatBounds();
-      chargingStations.forEach(station => {
-        bounds.extend(station.coordinates);
-      });
-      mapRef.current.fitBounds(bounds, { padding: 50, duration: 1000 });
+
+    try {
+      const res = await fetch(`${API_URL}/best-station?${params}`);
+      if (!res.ok) {
+        const err = await res.json();
+        setStationError(err.detail || 'No reachable station found.');
+        setLoadingBest(false);
+        return;
+      }
+      const data = await res.json();
+      setBestStation(data);
+
+      const map = mapRef.current;
+      if (map) {
+        // Remove previous best marker
+        if (bestMarkerRef.current) bestMarkerRef.current.remove();
+
+        // Add red marker for best station
+        bestMarkerRef.current = new mapboxgl.Marker({ color: '#ef4444' })
+          .setLngLat([data.longitude, data.latitude])
+          .setPopup(
+            new mapboxgl.Popup({ offset: 10 }).setHTML(
+              `<div style="color:#0f172a;font-family:sans-serif;font-size:13px">
+                <strong>🏆 Nearest Station</strong><br/>
+                Station ${data.station_id}<br/>
+                📍 ${data.distance_km} km away<br/>
+                ⭐ ${data.rating.toFixed(1)} &nbsp;💲$${data.cost.toFixed(2)}/kWh
+              </div>`
+            )
+          )
+          .addTo(map);
+
+        bestMarkerRef.current.getPopup().addTo(map);
+
+        map.flyTo({
+          center: [data.longitude, data.latitude],
+          zoom: 12,
+          duration: 1800,
+        });
+      }
+    } catch {
+      setStationError('Failed to connect to the backend. Is the server running?');
     }
-  }, [chargingStations]);
-  
-  const handleStationClick = (station) => {
-    setSelectedStation(station);
-    setShowModal(true);
+    setLoadingBest(false);
   };
-  
-  const handleAddToRoute = () => {
-    // Logic to add charging stop to route
-    console.log('Adding to route:', selectedStation);
-    setShowModal(false);
-  };
-  
-  // Calculate if battery is insufficient
-  const insufficientBattery = routeData && routeData.routes && 
-    routeData.routes.some(route => {
-      const endBattery = (route.start_battery || 85) - (route.battery_percentage_usage || 0);
-      return endBattery < 15;
-    });
-  
+
+  // ── Insufficient battery from routeData ──
+  const insufficientBattery =
+    routeData?.routes?.some((r) => {
+      const end = (r.start_battery || 85) - (r.battery_percentage_usage || 0);
+      return end < 15;
+    }) || false;
+
   return (
-    <div className="min-h-screen bg-[#0F172A] text-white p-6 relative overflow-auto">
+    <div className="min-h-screen bg-[#0F172A] text-white p-6 overflow-auto">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-28 font-bold font-poppins mb-6">Charging Intelligence</h1>
-        
-        {/* Warning for insufficient battery */}
-        {insufficientBattery && (
-          <div className="bg-orange-900 border-l-4 border-orange-500 text-orange-100 p-4 mb-6 rounded-lg">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <div className="ml-3">
-                <p className="text-sm font-medium">Battery may not be sufficient for this trip.</p>
-              </div>
+        {/* Header */}
+        <h1 className="text-2xl font-bold font-poppins mb-2 text-white">
+          ⚡ Charging Intelligence
+        </h1>
+        <p className="text-gray-400 text-sm mb-6">
+          {loadingStations
+            ? 'Loading stations…'
+            : `${stationCount.toLocaleString()} charging stations loaded from dataset`}
+        </p>
+
+        {/* Low-battery / insufficient battery banners */}
+        {(insufficientBattery || lowBatteryWarning) && (
+          <div className="bg-orange-900/60 border-l-4 border-orange-500 text-orange-100 p-4 mb-6 rounded-lg flex items-start gap-3">
+            <span className="text-xl">⚠️</span>
+            <div>
+              <p className="font-semibold text-sm">Low battery detected!</p>
+              <p className="text-xs mt-1 text-orange-200">
+                Your battery may not be sufficient for the planned trip. Use the finder below to
+                locate the nearest charging station.
+              </p>
             </div>
           </div>
         )}
-        
-        {/* Battery Health Impact Indicator */}
-        <div className="bg-orange-900 border-l-4 border-orange-500 text-orange-100 p-4 mb-6 rounded-lg">
-          <div className="flex items-start">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <p className="text-sm font-medium">Battery Health Impact Indicator</p>
-              <p className="text-xs mt-1">If you frequently drive high-elevation routes, battery degradation may increase by 12% annually.</p>
-            </div>
-          </div>
-        </div>
-        
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Map Section */}
+          {/* ── Map ── */}
           <div className="lg:col-span-2 bg-[#1E293B] rounded-xl p-4 shadow-lg border border-gray-700">
-            <h2 className="text-20 font-bold font-poppins mb-4 text-[#22C55E]">Nearest Charging Stations</h2>
-            
-            {/* Real map with charging stations */}
-            <div 
+            <h2 className="text-lg font-bold font-poppins mb-3 text-[#22C55E]">
+              Charging Stations Map
+            </h2>
+            <div
               ref={mapContainerRef}
-              className="w-full h-96 rounded-lg overflow-hidden bg-[#0F172A]"
-              style={{ minHeight: '384px' }}
+              className="w-full rounded-lg overflow-hidden"
+              style={{ height: '480px' }}
             />
+            {/* Legend */}
+            <div className="flex items-center gap-6 mt-3 text-xs text-gray-400">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-3 h-3 rounded-full bg-[#69E300]" /> All stations
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-3 h-3 rounded-full bg-red-500" /> Nearest (suggested)
+              </span>
+            </div>
           </div>
-          
-          {/* Charging Station List */}
-          <div className="bg-[#1E293B] rounded-xl p-4 shadow-lg border border-gray-700">
-            <h2 className="text-20 font-bold font-poppins mb-4 text-[#22C55E]">Available Stations</h2>
-            
-            <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
-              {chargingStations.map((station) => (
-                <div 
-                  key={station.id} 
-                  className="bg-[#0F172A] p-4 rounded-lg border border-gray-600 hover:border-[#22C55E] transition-colors cursor-pointer"
-                  onClick={() => handleStationClick(station)}
-                >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="font-bold text-white">{station.name}</h3>
-                      <div className="flex items-center mt-1">
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${station.type === 'Fast Charging' ? 'bg-blue-900 text-blue-200' : 'bg-gray-700 text-gray-200'}`}>
-                          {station.type === 'Fast Charging' ? (
-                            <>
-                              <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                              </svg>
-                              Fast
-                            </>
-                          ) : (
-                            <>
-                              <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 12.55a11 11 0 0114.08 0M12 18.5V10m-6 4a6 6 0 1112 0"></path>
-                              </svg>
-                              Normal
-                            </>
-                          )}
-                        </span>
-                      </div>
-                    </div>
+
+          {/* ── Sidebar: Finder + Result ── */}
+          <div className="flex flex-col gap-4">
+            {/* Finder form */}
+            <div className="bg-[#1E293B] rounded-xl p-5 shadow-lg border border-gray-700">
+              <h2 className="text-lg font-bold font-poppins mb-4 text-[#22C55E]">
+                Find Nearest Station
+              </h2>
+              <form onSubmit={handleFindNearest} className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Latitude</label>
+                    <input
+                      type="number"
+                      step="any"
+                      required
+                      value={vehicleLat}
+                      onChange={(e) => setVehicleLat(e.target.value)}
+                      placeholder="e.g. 19.07"
+                      className="w-full bg-[#0F172A] border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#22C55E]"
+                    />
                   </div>
-                  
-                  <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
-                    <div className="text-center p-2 bg-gray-800 rounded">
-                      <div className="text-gray-400">Distance</div>
-                      <div className="text-white font-bold">{station.distance} km</div>
-                    </div>
-                    <div className="text-center p-2 bg-gray-800 rounded">
-                      <div className="text-gray-400">Wait</div>
-                      <div className="text-white font-bold">{station.waitingTime} min</div>
-                    </div>
-                    <div className="text-center p-2 bg-gray-800 rounded">
-                      <div className="text-gray-400">Detour</div>
-                      <div className="text-white font-bold">+{station.detourImpact}%</div>
-                    </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Longitude</label>
+                    <input
+                      type="number"
+                      step="any"
+                      required
+                      value={vehicleLon}
+                      onChange={(e) => setVehicleLon(e.target.value)}
+                      placeholder="e.g. 72.87"
+                      className="w-full bg-[#0F172A] border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#22C55E]"
+                    />
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
-        
-        {/* Station Detail Modal */}
-        {showModal && selectedStation && (
-          <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
-            <div className="bg-[#1E293B] rounded-xl p-6 max-w-md w-full border border-gray-600">
-              <div className="flex justify-between items-start mb-4">
-                <h2 className="text-20 font-bold font-poppins text-[#22C55E]">Charging Station Details</h2>
-                <button 
-                  onClick={() => setShowModal(false)}
-                  className="text-gray-400 hover:text-white text-2xl"
-                >
-                  &times;
-                </button>
-              </div>
-              
-              <div className="space-y-4">
+
                 <div>
-                  <h3 className="font-bold text-lg text-white">{selectedStation.name}</h3>
-                  <div className="flex items-center mt-2">
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${selectedStation.type === 'Fast Charging' ? 'bg-blue-900 text-blue-200' : 'bg-gray-700 text-gray-200'}`}>
-                      {selectedStation.type === 'Fast Charging' ? (
-                        <>
-                          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                          </svg>
-                          Fast Charger
-                        </>
-                      ) : (
-                        <>
-                          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 12.55a11 11 0 0114.08 0M12 18.5V10m-6 4a6 6 0 1112 0"></path>
-                          </svg>
-                          Normal Charger
-                        </>
-                      )}
+                  <label className="text-xs text-gray-400 block mb-1">
+                    Battery Level (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    required
+                    value={batteryPercent}
+                    onChange={(e) => setBatteryPercent(e.target.value)}
+                    placeholder="e.g. 20"
+                    className="w-full bg-[#0F172A] border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#22C55E]"
+                  />
+                  {batteryPercent && (
+                    <div className="mt-1 h-1.5 rounded-full bg-gray-700 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          Number(batteryPercent) < 20
+                            ? 'bg-red-500'
+                            : Number(batteryPercent) < 50
+                            ? 'bg-yellow-400'
+                            : 'bg-[#22C55E]'
+                        }`}
+                        style={{ width: `${batteryPercent}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Capacity (kWh)
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="1"
+                      value={batteryCapacity}
+                      onChange={(e) => setBatteryCapacity(e.target.value)}
+                      className="w-full bg-[#0F172A] border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#22C55E]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Efficiency (km/kWh)
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0.1"
+                      value={efficiency}
+                      onChange={(e) => setEfficiency(e.target.value)}
+                      className="w-full bg-[#0F172A] border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#22C55E]"
+                    />
+                  </div>
+                </div>
+
+                {batteryPercent && batteryCapacity && efficiency && (
+                  <p className="text-xs text-gray-400">
+                    Estimated range:{' '}
+                    <span className="text-white font-semibold">
+                      {(
+                        (Number(batteryPercent) / 100) *
+                        Number(batteryCapacity) *
+                        Number(efficiency)
+                      ).toFixed(1)}{' '}
+                      km
+                    </span>
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loadingBest}
+                  className="w-full bg-[#22C55E] hover:bg-green-400 disabled:opacity-50 text-[#0F172A] font-bold py-2.5 rounded-lg transition-all duration-200 shadow-lg shadow-green-500/20 text-sm"
+                >
+                  {loadingBest ? 'Searching…' : '🔍 Find Nearest Station'}
+                </button>
+              </form>
+
+              {stationError && (
+                <div className="mt-3 bg-red-900/50 border border-red-700 text-red-200 text-xs p-3 rounded-lg">
+                  {stationError}
+                </div>
+              )}
+            </div>
+
+            {/* Best station result card */}
+            {bestStation && (
+              <div className="bg-[#1E293B] rounded-xl p-5 shadow-lg border border-[#22C55E]/50 animate-pulse-once">
+                <h3 className="text-base font-bold text-[#22C55E] mb-3 flex items-center gap-2">
+                  <span>🏆</span> Nearest Reachable Station
+                </h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Station ID</span>
+                    <span className="text-white font-semibold">{bestStation.station_id}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Distance</span>
+                    <span className="text-white font-semibold">{bestStation.distance_km} km</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Rating</span>
+                    <span className="text-yellow-400 font-semibold">
+                      ⭐ {bestStation.rating.toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Cost</span>
+                    <span className="text-white font-semibold">
+                      ${bestStation.cost.toFixed(2)}/kWh
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Your range</span>
+                    <span className="text-green-400 font-semibold">
+                      {bestStation.remaining_range_km} km
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Coordinates</span>
+                    <span className="text-gray-300 text-xs">
+                      {bestStation.latitude.toFixed(4)}, {bestStation.longitude.toFixed(4)}
                     </span>
                   </div>
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-[#0F172A] p-3 rounded-lg">
-                    <div className="text-gray-400 text-sm">Charging Speed</div>
-                    <div className="text-white font-bold">{selectedStation.chargingSpeed}</div>
-                  </div>
-                  <div className="bg-[#0F172A] p-3 rounded-lg">
-                    <div className="text-gray-400 text-sm">Full Charge Time</div>
-                    <div className="text-white font-bold">{selectedStation.fullChargeTime}</div>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-gray-800 p-3 rounded-lg text-center">
-                    <div className="text-gray-400 text-xs">Distance</div>
-                    <div className="text-white font-bold">{selectedStation.distance} km</div>
-                  </div>
-                  <div className="bg-gray-800 p-3 rounded-lg text-center">
-                    <div className="text-gray-400 text-xs">Wait Time</div>
-                    <div className="text-white font-bold">{selectedStation.waitingTime} min</div>
-                  </div>
-                  <div className="bg-gray-800 p-3 rounded-lg text-center">
-                    <div className="text-gray-400 text-xs">Detour Impact</div>
-                    <div className="text-white font-bold">+{selectedStation.detourImpact}%</div>
-                  </div>
-                </div>
+
+                <button
+                  onClick={() => {
+                    if (mapRef.current) {
+                      mapRef.current.flyTo({
+                        center: [bestStation.longitude, bestStation.latitude],
+                        zoom: 14,
+                        duration: 1200,
+                      });
+                    }
+                  }}
+                  className="mt-4 w-full bg-[#0F172A] hover:bg-gray-800 border border-[#22C55E]/40 text-[#22C55E] text-xs font-semibold py-2 rounded-lg transition-all"
+                >
+                  📍 Zoom to Station
+                </button>
               </div>
-              
-              <button 
-                onClick={handleAddToRoute}
-                className="w-full mt-6 bg-[#22C55E] text-[#0F172A] font-bold py-3 px-4 rounded-lg hover:bg-green-400 transition-all duration-200 shadow-lg shadow-green-500/20"
-              >
-                Add to Route
-              </button>
+            )}
+
+            {/* Battery health tip */}
+            <div className="bg-[#1E293B] rounded-xl p-4 border border-gray-700 text-xs text-gray-400">
+              <p className="font-semibold text-gray-300 mb-1">💡 Battery Health Tip</p>
+              <p>
+                Frequent fast-charging above 80% can increase battery degradation by up to 12%
+                annually. Prefer charging to 80% for daily use.
+              </p>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
