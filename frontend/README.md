@@ -55,39 +55,9 @@ npm run dev
 
 The application will be available at `http://localhost:5173` (default Vite port)
 
-### Production Build
 
-Build optimized production bundle:
 
-```bash
-npm run build
-```
 
-Output files will be in the `dist/` directory
-
-### Preview Production Build
-
-Preview the production build locally:
-
-```bash
-npm run preview
-```
-
-## 🧹 Code Quality
-
-### Linting
-
-Run ESLint to check code quality:
-
-```bash
-npm run lint
-```
-
-Fix linting issues automatically:
-
-```bash
-npm run lint -- --fix
-```
 
 ## 📁 Project Structure
 
