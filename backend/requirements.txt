@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+joblib
+scikit-learn
+python-dotenv
+pydantic
+pandas
+requests
+httpx
+aiosqlite

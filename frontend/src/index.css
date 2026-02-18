@@ -1,0 +1,173 @@
+/* Import Poppins and Inter fonts */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles for the premium dashboard */
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #0F172A;
+  color: white;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Light theme overrides */
+body.light-theme {
+  background-color: #ffffff;
+  color: #1e293b;
+}
+
+
+
+
+
+
+
+/* Light theme overrides for specific classes */
+.light-theme .bg-\[\#0F172A\] {
+  @apply bg-white;
+}
+
+
+
+
+
+
+
+
+
+
+
+/* Animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out forwards;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slideInRight {
+  animation: slideInRight 0.3s ease-out forwards;
+}
+
+/* EV Wheel Spinner */
+.ev-wheel-spinner {
+  animation: spin 1s linear infinite;
+}
+
+.input-style {
+  @apply bg-black border border-[#69E300] p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-[#69E300];
+}
+
+.font-poppins {
+  font-family: 'Poppins', sans-serif;
+}
+
+.font-inter {
+  font-family: 'Inter', sans-serif;
+}
+
+.text-28 {
+  font-size: 28px;
+}
+
+.text-20 {
+  font-size: 20px;
+}
+
+.slider-green::-webkit-slider-thumb {
+  appearance: none;
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #22C55E;
+  cursor: pointer;
+  box-shadow: 0 0 5px rgba(34, 197, 94, 0.5);
+}
+
+.slider-green::-moz-range-thumb {
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #22C55E;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 5px rgba(34, 197, 94, 0.5);
+}
+
+/* Glow effect for active buttons */
+.glow-button {
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.glow-button:hover {
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.5);
+}
+
+/* Hover animation for cards */
+.card-hover {
+  transition: all 0.3s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+}
+
+/* Tooltip styles */
+.tooltip {
+  position: relative;
+}
+
+.tooltip:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1E293B;
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 100;
+  border: 1px solid #3B82F6;
+}
