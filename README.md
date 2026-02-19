@@ -100,12 +100,12 @@ Plan your routes with detailed analysis of distance, time, and battery consumpti
 ### Map View & Charging Stations
 Interactive map showing your route and nearby charging station locations.
 
-![Map View Screenshot 3](Images/s3.png)
+![Map View Screenshot 3](Images/s4.png)
 
 ### EV Profile Management
 Manage your electric vehicle profiles with detailed specifications and history.
 
-![EV Profile Screenshot 4](Images/s4.png)
+![EV Profile Screenshot 4](Images/s6.png)
 
 ### Sustainability Report
 Track your environmental impact and sustainability metrics over time.
@@ -441,34 +441,11 @@ npm run build         # Build test
 
 ---
 
-## 🔒 Security
 
-- **Environment Variables**: All sensitive data stored in `.env` files
-- **CORS**: Configured for frontend-backend communication
-- **Input Validation**: Pydantic models validate all API inputs
-- **Database**: SQLite with async operations
-- **API**: RESTful design with proper HTTP methods
-
-### Important Setup
-1. Create `.env` files in both frontend and backend
-2. Never commit `.env` files to version control
-3. Use secure Mapbox tokens in production
-4. Enable HTTPS in production deployments
 
 ---
 
-## 📝 Development Workflow
 
-### Code Style
-- **Python**: PEP 8 with type hints
-- **JavaScript**: ESLint configuration included
-- **CSS**: Tailwind CSS utility classes
-
-### Making Changes
-1. Create a feature branch
-2. Make changes with meaningful commits
-3. Test thoroughly
-4. Submit pull request with description
 
 ### Common Commands
 
@@ -494,21 +471,9 @@ pip install -r requirements.txt  # Install deps
 ### Documentation
 - [Frontend README](frontend/README.md) - Setup and features
 - [Backend README](backend/README.md) - API and ML details
-- [FastAPI Docs](https://fastapi.tiangolo.com/) - Framework guide
-- [React Docs](https://react.dev/) - UI library reference
 
-### Troubleshooting
-1. Check terminal error messages
-2. Verify all prerequisites are installed
-3. Ensure ports 5173 (frontend) and 8000 (backend) are free
-4. Check `.env` file configuration
-5. Review logs in browser console and terminal
 
-### Common Issues
-- **Port in use**: Change port with `--port 3000` flag
-- **CORS errors**: Update allowed origins in `app/main.py`
-- **Module not found**: Reinstall dependencies
-- **Model not loading**: Verify `ML_Models/` directory exists
+
 
 ---
 
@@ -526,9 +491,6 @@ pip install -r requirements.txt  # Install deps
 
 ---
 
-## 📄 License
-
-This project is open source and part of the GreenMiles EV initiative for sustainable electric vehicle adoption.
 
 ---
 
@@ -542,7 +504,6 @@ We welcome contributions! To contribute:
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
@@ -550,7 +511,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 - **GitHub Issues**: Report bugs and feature requests
 - **Discussions**: Share ideas and ask questions
-- **Email**: support@greenmiles.dev
 
 ---
 
@@ -560,7 +520,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ⭐ If you find this project useful, please consider giving it a star on GitHub!
 
-[View on GitHub](https://github.com/yourusername/GreenMiles-EV) | [Report Issue](https://github.com/yourusername/GreenMiles-EV/issues) | [Request Feature](https://github.com/yourusername/GreenMiles-EV/issues)
+[View on GitHub](https://github.com/mr-shlok/GreenMiles-EV) | [Report Issue](https://github.com/mr-shlok/GreenMiles-EV/issues) | [Request Feature](https://github.com/mr-shlok/GreenMiles-EV/issues)
 
 **Happy Green Miles! 🚗⚡🌱**
 
